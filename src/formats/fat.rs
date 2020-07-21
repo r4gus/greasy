@@ -27,12 +27,40 @@ pub struct Fat {
     sectors_fat_area: u32,          // Total number of sectors of the fat area
     start_fat_area: Sector,         // Offset to the fat area
     start_data_area: Sector,        // Offset to the data area
-    start_root_dir: Sector,        // Offset to the root directory
+    start_root_dir: Sector,         // Offset to the root directory
     start_cluster_area: Sector      // Offset to the cluster area
 }
 
+#[derive(Debug)]
+pub struct Entry {
+    name: String,                   // Name of the directory entry
+    attributes: u8,                 // Attributes of the entry
+    creat_tos: u8,                  // Time created (epoche)
+    creat_hms: u16,                 // Time created (hours, minutes, seconds)
+    creat_day: u16,                 // Day created
+    access_day: u16,                // Day accessed
+    written_hms: u16,               // Time written to (hours, minutes, seconds)
+    written_day: u16,               // Day written to
+    start: Cluster,                 // First Cluster that belongs to the file
+    size: u32,                      // Size of the file (in bytes)
+    checksum: u8,                   // Checksum of file (required for LFN entries)
+}
+
+
 impl Fat {
     const DIR_ENTRY_SIZE: u16 = 32;
+
+    fn cluster_to_sector(&self, cluster: &Cluster) -> Sector {
+        Sector(((cluster.0 - 2) * self.sectors_per_cluster as u32) + self.start_data_area.0)
+    }
+
+    fn sector_to_cluster(&self, sector: &Sector) -> Cluster {
+        Cluster((sector.0 - self.start_data_area.0) / self.sectors_per_cluster as u32)
+    }
+
+    fn offset(&self, sector: &Sector) -> usize {
+        sector.0 as usize * self.bytes_per_sector as usize
+    }
 
     pub fn new(mem: Mmap) -> Fat {
         let oem = CString::new(&mem[3..11]).expect("Parsing oem field for failed")
@@ -102,6 +130,14 @@ impl Fat {
         }
     }
 
+    pub fn tree(&self) {
+        let offset = self.offset(&self.start_root_dir);
+        let entry = Entry::new(&self.mem[offset..offset + Fat::DIR_ENTRY_SIZE as usize]);
+        let entry2 = Entry::new(&self.mem[offset + (Fat::DIR_ENTRY_SIZE as usize * 2)..offset + (Fat::DIR_ENTRY_SIZE as usize * 3)]);
+        println!("{:?}", entry);
+        println!("{:?}", entry2);
+    }
+
     pub fn info(&self) {
         println!("FILE SYSTEM INFORMATION
 --------------------------------
@@ -145,6 +181,38 @@ Total Sector Range: 0 - {}
         } else {
             println!("    |- Root: {} - {}", self.start_root_dir.0, self.start_cluster_area.0 - 1);
             println!("    └─ Cluster Area: {} - {}", self.start_cluster_area.0, self.total_sectors - 1);
+        }
+    }
+}
+
+impl Entry {
+    pub fn checksum(s: &str) -> u8 {
+        let mut checksum: u16 = 0;
+
+        for c in s.as_bytes() {
+            checksum = (((checksum & 1) << 7 | (checksum >> 1)) + *c as u16) % 256;
+        }
+
+        checksum as u8
+    }
+
+    pub fn new(mem: &[u8]) -> Entry {
+        let name = CString::new(&mem[..11]).expect("Parsing name field failed")
+                                          .into_string()
+                                          .expect("Translation from CString to String failed");
+        Entry {
+            attributes: mem[11] as u8,
+            creat_tos: mem[13] as u8,
+            creat_hms: LittleEndian::read_u16(&mem[14..16]),
+            creat_day: LittleEndian::read_u16(&mem[16..18]),
+            access_day: LittleEndian::read_u16(&mem[18..20]),
+            written_hms: LittleEndian::read_u16(&mem[22..24]),
+            written_day: LittleEndian::read_u16(&mem[24..26]),
+            start: Cluster(((LittleEndian::read_u16(&mem[20..22]) as u32) << 16) +
+                             LittleEndian::read_u16(&mem[26..28]) as u32),
+            size: LittleEndian::read_u32(&mem[28..32]),
+            checksum: Entry::checksum(&name),
+            name: name,
         }
     }
 }

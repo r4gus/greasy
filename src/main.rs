@@ -12,6 +12,7 @@ fn main() -> std::io::Result<()> {
     let fat = fat::Fat::new(mem);
     
     fat.info();
+    fat.tree();
 
     Ok(())
 }
