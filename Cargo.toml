@@ -1,5 +1,5 @@
 [package]
-name = "recovery"
+name = "greasy"
 version = "0.1.0"
 authors = ["r4gus"]
 edition = "2018"
