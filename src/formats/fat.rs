@@ -59,6 +59,11 @@ pub struct Fat {
 pub struct Entry {
     /// Name of the directory entry
     name: String,                   
+    /// Long version of the file name
+    ///
+    /// This entry is initially None. One can add a LFN by using the
+    /// add_lfn() method.
+    long_name: Option<String>,
     /// Attributes of the entry
     attributes: u8,                 
     /// Time created (epoche)
@@ -245,11 +250,8 @@ impl Fat {
             i = next;
         }
 
-        for (key, val) in lfns.iter() {
-            println!("key: {} val: {:?}", key, val);
-        }
-
-        for e in files {
+        for e in &mut files {
+            e.add_lfn(&mut lfns);
             println!("{}", e.to_string());
         }
     }
@@ -358,6 +360,7 @@ impl Entry {
                 0xe5 => true,
                 _ => false,
             },
+            long_name: None,
             name: name,
         }
     }
@@ -378,9 +381,26 @@ impl Entry {
     }
 
     pub fn to_string(&self) -> String {
-        format!("{}: [deleted = {}, cluster = {}]", self.name.trim(), self.deleted, self.start.0)
+        let name = match &self.long_name {
+            Some(n) => n,
+            None => self.name.trim(),
+        };
+
+        format!("{}: [deleted = {}, cluster = {}]", name, self.deleted, self.start.0)
     }
 
+    pub fn add_lfn(&mut self, lfns: &mut HashMap<u8, Vec<LFNEntry>>) {
+        if let Some(lfn_vec) = lfns.get_mut(&self.checksum) {
+            let mut s = String::new();
+            lfn_vec.reverse();
+
+            for e in lfn_vec {
+                s.push_str(&e.filename);
+            }
+
+            self.long_name = Some(s);
+        }
+    }
 }
 
 impl LFNEntry {
