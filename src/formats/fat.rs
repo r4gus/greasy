@@ -80,6 +80,9 @@ pub struct Entry {
     written_day: u16,               
     /// First Cluster that belongs to the file
     start: Cluster,                 
+    /// All clusters belonging to the file. One can add the cluster chain by
+    /// invoking add_cluster_chain()
+    clusters: Option<Vec<Cluster>>,
     /// File size (in bytes)
     size: u32,                      
     /// Checksum of file (required for LFN entries)
@@ -89,6 +92,7 @@ pub struct Entry {
 }
 
 #[derive(Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Represents a Long File Name entry (LFN)
 ///
 /// FAT uses LFN entries to store long file names (> 11 Bytes).
@@ -136,6 +140,11 @@ impl Fat {
     /// * `sector` - Secotr number that should be converted into an offset
     fn offset(&self, sector: &Sector) -> usize {
         sector.0 as usize * self.bytes_per_sector as usize
+    }
+
+    pub fn fat_table_offset(&self, cluster: &Cluster) -> usize {
+        assert!(cluster.0 >= 2);
+        ((self.start_fat_area.0 * self.bytes_per_sector as u32) + (cluster.0 * self.fat_table_entry_size as u32)) as usize
     }
     
     /// Returns a new Fat
@@ -354,6 +363,7 @@ impl Entry {
             written_day: LittleEndian::read_u16(&mem[24..26]),
             start: Cluster(((LittleEndian::read_u16(&mem[20..22]) as u32) << 16) +
                              LittleEndian::read_u16(&mem[26..28]) as u32),
+            clusters: None,
             size: LittleEndian::read_u32(&mem[28..32]),
             checksum: Entry::checksum(&name),
             deleted: match mem[0] {
@@ -377,22 +387,42 @@ impl Entry {
     
     /// Checks if deltion marker is set
     fn is_deleted(&self) -> bool {
-        self.name.as_bytes()[0] == 0xe5
+        self.deleted
     }
-
+    
+    /// Returns the string representation of the given entry
     pub fn to_string(&self) -> String {
+        let entry_type;
         let name = match &self.long_name {
             Some(n) => n,
             None => self.name.trim(),
         };
 
-        format!("{}: [deleted = {}, cluster = {}]", name, self.deleted, self.start.0)
-    }
+        if self.is_disk_volume_entry() {
+            entry_type = "Disk Volume"; 
+        } else if self.is_subdir_entry() {
+            entry_type = "Directory";
+        } else {
+            entry_type = "File";
+        }
+        
 
+        format!("{}: [deleted = {}, cluster = {}, type = {}]", name, self.deleted, self.start.0, entry_type)
+    }
+    
+    /// Add the LFN name to the entry
+    ///
+    /// # Arguments
+    ///
+    /// * `lfns` - A hash map that maps from a cheksum to a vector of LFN entries
+    ///
+    /// The LFN entries are sorted based on their sequencing number and then
+    /// concatendated to build a single string. That string is then assigned to
+    /// the long_name filed of the given entry.
     pub fn add_lfn(&mut self, lfns: &mut HashMap<u8, Vec<LFNEntry>>) {
         if let Some(lfn_vec) = lfns.get_mut(&self.checksum) {
             let mut s = String::new();
-            lfn_vec.reverse();
+            lfn_vec.sort();
 
             for e in lfn_vec {
                 s.push_str(&e.filename);
@@ -400,6 +430,19 @@ impl Entry {
 
             self.long_name = Some(s);
         }
+    }
+
+    pub fn add_cluster_chain(&mut self, fat: &Fat) {
+        let mut clusters = Vec::new();
+        let mut n = self.start.0 as i32;
+        let mut offset;
+
+        while n != -1 && n != 0 && n != -9 {
+            clusters.push(Cluster(n as u32));
+            offset = fat.fat_table_offset(&self.start);
+        }
+        
+        self.clusters = Some(clusters);
     }
 }
 
