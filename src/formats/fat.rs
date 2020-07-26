@@ -304,7 +304,7 @@ impl Fat {
         
         // build indentation string
         for _x in 0..indentation {
-            indent_str.push_str("  ");
+            indent_str.push_str("*");
         }
 
         // iterate over each cluster offset of the current dir
@@ -337,7 +337,7 @@ impl Fat {
             
 
             if e.is_this_entry() == false && e.is_prev_entry() == false {
-                print!("{}|-", indent_str);
+                print!("{}", indent_str);
                 println!("{}", e.to_string());
             }
 
@@ -403,9 +403,9 @@ Total Sector Range: 0 - {}
 
 impl FAT for Fat16 {
     fn tree(&self) {
-        println!("File layout:\n--------------------------------");
+        println!("File layout:\nDeleted = X, Disk Volume = V\nDirectory = D, File = F\n---------------------------------------");
         let offset = self.fat.offset(&self.fat.start_root_dir);
-        self.fat._tree(vec![offset], (self.total_root_entries * Fat::DIR_ENTRY_SIZE) as usize, 0);
+        self.fat._tree(vec![offset], (self.total_root_entries * Fat::DIR_ENTRY_SIZE) as usize, 1);
     }
 
 

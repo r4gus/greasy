@@ -152,21 +152,29 @@ impl Entry {
     /// Returns the string representation of the given entry
     pub fn to_string(&self) -> String {
         let entry_type;
+        let del;
         let name = match &self.long_name {
             Some(n) => n,
             None => self.name.trim(),
         };
 
         if self.is_disk_volume_entry() {
-            entry_type = "Disk Volume"; 
+            entry_type = "V"; // Disk Volume
         } else if self.is_subdir_entry() {
-            entry_type = "Directory";
+            entry_type = "D"; // Directory
         } else {
-            entry_type = "File";
+            entry_type = "F"; // File
         }
+
+        if self.deleted {
+            del = "X | ";
+        } else {
+            del = "";
+        }
+
         
 
-        format!("{}: [deleted = {}, cluster = {}, type = {}]", name, self.deleted, self.start.0, entry_type)
+        format!("[{}: {}{}]", name, del, entry_type)
     }
     
     /// Add the LFN name to the entry
