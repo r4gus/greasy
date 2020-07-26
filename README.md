@@ -20,7 +20,7 @@
 <br />
 <p align="center">
   <a href="https://github.com/r4gus/greasy">
-    <img src="images/logo.png" alt="Logo" width="80" height="80">
+    <img src="images/greasy.png" alt="Logo" width="160" height="80">
   </a>
 
   <h3 align="center">Greasy</h3>
@@ -58,8 +58,6 @@
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
-
-[![Product Name Screen Shot][product-screenshot]](https://example.com) <!-- screen shot of our program -->
 
 __Greasy__ can currently display the details associated with a FAT16/ 32 file system. One can look up general information
 like the cluster size (in Bytes) or the file system layout. It is also possible to list contents of directories in a tree-like format.
