@@ -98,9 +98,12 @@ impl Entry {
     ///
     /// * `mem` - A byte slice representing the entry in memory (Expected to be 32-Bytes)
     pub fn new(mem: &[u8]) -> Entry {
+        /*
         let name = CString::new(&mem[..11]).expect("Parsing name field failed")
                                           .into_string()
                                           .expect("Translation from CString to String failed");
+                                          */
+        let name = String::from_utf8_lossy(&mem[..11]).to_string();
         Entry {
             attributes: mem[11] as u8,
             creat_tos: mem[13] as u8,
@@ -124,18 +127,26 @@ impl Entry {
     }
 
     /// Checks if entry is a disk volume entry 
-    fn is_disk_volume_entry(&self) -> bool {
+    pub fn is_disk_volume_entry(&self) -> bool {
         (self.attributes & 0x08) != 0
     }
     
     /// Checks if entry is a sub directory
-    fn is_subdir_entry(&self) -> bool {
+    pub fn is_subdir_entry(&self) -> bool {
         (self.attributes & 0x10) != 0
     }
     
     /// Checks if deltion marker is set
-    fn is_deleted(&self) -> bool {
+    pub fn is_deleted(&self) -> bool {
         self.deleted
+    }
+
+    pub fn is_this_entry(&self) -> bool {
+        self.name.trim() == "."
+    }
+
+    pub fn is_prev_entry(&self) -> bool {
+        self.name.trim() == ".."
     }
     
     /// Returns the string representation of the given entry
@@ -180,17 +191,16 @@ impl Entry {
         }
     }
 
-    pub fn add_cluster_chain(&mut self, fat: &Fat) {
-        let mut clusters = Vec::new();
-        let mut n = self.start.0 as i32;
-        let mut offset;
-
-        while n != -1 && n != 0 && n != -9 {
-            clusters.push(Cluster(n as u32));
-            offset = fat.fat_table_offset(&self.start);
-        }
-        
+    pub fn add_clusters(&mut self, clusters: Vec<Cluster>) {
         self.clusters = Some(clusters);
+    }
+
+    pub fn clusters(&self) -> &Option<Vec<Cluster>> {
+        &self.clusters
+    }
+
+    pub fn start(&self) -> &Cluster {
+        &self.start
     }
 }
 

@@ -87,6 +87,10 @@ pub struct Fat32 {
 impl Fat {
     /// Size of a directory entry in bytes
     const DIR_ENTRY_SIZE: u16 = 32;
+    const EOF16: i16 = -1;
+    const EOF32: i32 = 0x0fffffff;
+    const BAD16: i16 = -9;
+    const BAD32: i32 = -9;
     
     /// Convert a cluster number into a sector number
     ///
@@ -95,7 +99,7 @@ impl Fat {
     /// * `cluster` - Cluster number (must be >= 2)
     fn cluster_to_sector(&self, cluster: &Cluster) -> Sector {
         assert!(cluster.0 >= 2);
-        Sector(((cluster.0 - 2) * self.sectors_per_cluster as u32) + self.start_data_area.0)
+        Sector(((cluster.0 - 2) * self.sectors_per_cluster as u32) + self.start_cluster_area.0)
     }
     
     /// Convert a sector number into a cluster number
@@ -104,7 +108,7 @@ impl Fat {
     ///
     /// * `sector` - Sector number
     fn sector_to_cluster(&self, sector: &Sector) -> Cluster {
-        Cluster((sector.0 - self.start_data_area.0) / self.sectors_per_cluster as u32)
+        Cluster((sector.0 - self.start_cluster_area.0) / self.sectors_per_cluster as u32)
     }
     
     /// Calculate the offset from the beginning of the file (in bytes)
@@ -115,10 +119,76 @@ impl Fat {
     fn offset(&self, sector: &Sector) -> usize {
         sector.0 as usize * self.bytes_per_sector as usize
     }
-
+    
+    /// Returns a byte index into the FAT table that corresponds to the given cluster
+    ///
+    /// # Arguments
+    ///
+    /// * `cluster` - The n'th cluster to get the index for
     pub fn fat_table_offset(&self, cluster: &Cluster) -> usize {
         assert!(cluster.0 >= 2);
-        ((self.start_fat_area.0 * self.bytes_per_sector as u32) + (cluster.0 * self.fat_table_entry_size as u32)) as usize
+        ((self.start_fat_area.0 * self.bytes_per_sector as u32) + (cluster.0 * (self.fat_table_entry_size / 8) as u32)) as usize
+    }
+    
+    /// Converts a vector of clusters into a vector of byte offsets
+    ///
+    /// # Arguments
+    ///
+    /// * `clusters' - Vector of clusters
+    pub fn clusters_to_offsets(&self, clusters: &Vec<Cluster>) -> Vec<usize> {
+        let mut offsets = Vec::new();
+
+        for cluster in clusters {
+            let sector = self.cluster_to_sector(cluster);
+            offsets.push(self.offset(&sector));
+        }
+
+        offsets
+    }
+    
+    /// Returns a Vector of Clusters that belong to a single file or directory
+    ///
+    /// # Arguments
+    ///
+    /// * `cluster` - First cluster of the cluster chain
+    ///
+    /// # FAT table Entry types
+    /// ## Fat16
+    /// 1. unused/ free cluster: 0x0000
+    /// 2. bad cluster: -9
+    /// 3. address of next cluster: n
+    /// 4. last cluster in a file (EOF): -1
+    ///
+    /// ## Fat32
+    /// 1. unused/ free cluster: 0x0000
+    /// 2. bad cluster: 0xfffffff7
+    /// 3. address of next cluster: n
+    /// 4. last cluster in a file (EOF): 0x0fffffff
+    fn get_cluster_chain(&self, cluster: &Cluster) -> Vec<Cluster> {
+        let mut clusters = Vec::new();
+        let mut offset;
+
+        if self.fat_table_entry_size == 16 {
+            let mut n = cluster.0 as i16;
+
+            while n != Fat::EOF16 && n != 0 && n != Fat::BAD16 {
+                let clu = Cluster(n as u32);
+                offset = self.fat_table_offset(&clu);
+                clusters.push(clu);
+                n = LittleEndian::read_i16(&self.mem[offset..offset+self.fat_table_entry_size as usize]);
+            }
+        } else {
+            let mut n = cluster.0 as i32;
+
+            while n != Fat::EOF32 && n != 0 && n != Fat::BAD32 {
+                let clu = Cluster(n as u32);
+                offset = self.fat_table_offset(&clu);
+                clusters.push(clu);
+                n = LittleEndian::read_i32(&self.mem[offset..offset+self.fat_table_entry_size as usize]);
+            }
+        }
+
+        clusters
     }
     
     /// Returns a new Box pointer to a Fat16 or Fat32
@@ -221,16 +291,24 @@ impl Fat {
     ///
     /// * `offset` - Vector of byte offsets to the different clusters of a directory
     /// * `max` - Maximum number of bytes per cluster
+    /// * 'indentation' - Indentation level
     ///
     /// There is only one offset if the fat is of type fat16 and it has a max size of
     /// <total_root_entries * Fat::DIR_ENTRY_SIZE>.
-    fn _tree(&self, offset: Vec<usize>, max: usize) {
+    fn _tree(&self, offset: Vec<usize>, max: usize, indentation: u8) {
         let mut files: Vec<Entry> = Vec::new();
         let mut lfns: HashMap<u8, Vec<LFNEntry>> = HashMap::new();
         let mut i: usize;
         let mut next; 
+        let mut indent_str = String::new();
+        
+        // build indentation string
+        for _x in 0..indentation {
+            indent_str.push_str("  ");
+        }
 
-        for coff in offset {   // iterate over each cluster offset of the current dir
+        // iterate over each cluster offset of the current dir
+        for coff in offset {   
             i = 0;
 
             while self.mem[coff + i] != 0 && i < max {
@@ -247,11 +325,28 @@ impl Fat {
 
                 i = next;
             }
+
+            if self.mem[coff + i] != 0 {
+                break;
+            }
         }
 
         for e in &mut files {
             e.add_lfn(&mut lfns);
-            println!("{}", e.to_string());
+            e.add_clusters(self.get_cluster_chain(&e.start()));
+            
+
+            if e.is_this_entry() == false && e.is_prev_entry() == false {
+                print!("{}|-", indent_str);
+                println!("{}", e.to_string());
+            }
+
+            if e.is_subdir_entry() && e.is_this_entry() == false && e.is_prev_entry() == false {
+                match e.clusters() {
+                    Some(clu) => self._tree(self.clusters_to_offsets(clu), (self.bytes_per_sector * (self.sectors_per_cluster as u16)) as usize, indentation + 1),
+                    None => (),
+                };
+            }
         }
     }
     
@@ -300,15 +395,19 @@ Total Sector Range: 0 - {}
             println!("    |- Root: {} - {}", self.start_root_dir.0, self.start_cluster_area.0 - 1);
             println!("    └─ Cluster Area: {} - {}", self.start_cluster_area.0, self.total_sectors - 1);
         }
+
+        println!("\n");
     }
     
 }
 
 impl FAT for Fat16 {
     fn tree(&self) {
+        println!("File layout:\n--------------------------------");
         let offset = self.fat.offset(&self.fat.start_root_dir);
-        self.fat._tree(vec![offset], (self.total_root_entries * Fat::DIR_ENTRY_SIZE) as usize);
+        self.fat._tree(vec![offset], (self.total_root_entries * Fat::DIR_ENTRY_SIZE) as usize, 0);
     }
+
 
     fn info(&self) {
         self.fat.info();
@@ -317,7 +416,7 @@ impl FAT for Fat16 {
 
 impl FAT for Fat32 {
     fn tree(&self) {
-
+        println!("Not implemented for Fat32 yet!");
     }
 
     fn info(&self) {
