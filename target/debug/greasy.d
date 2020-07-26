@@ -1,1 +1,0 @@
-/home/r4gus/Documents/Forensics/greasy/target/debug/greasy: /home/r4gus/Documents/Forensics/greasy/src/formats/fat.rs /home/r4gus/Documents/Forensics/greasy/src/formats/fat_entry.rs /home/r4gus/Documents/Forensics/greasy/src/formats.rs /home/r4gus/Documents/Forensics/greasy/src/lib.rs /home/r4gus/Documents/Forensics/greasy/src/main.rs
