@@ -6,6 +6,15 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 use super::fat_entry::*;
 
+// ###################### TRAITS #############################
+
+pub trait FAT {
+    fn tree(&self);
+    fn info(&self);
+}
+
+// ###################### STRUCTURES #########################
+
 #[derive(Debug)]
 /// Represents a specific Cluster (not a range)
 pub struct Cluster(pub u32);
@@ -15,13 +24,16 @@ pub struct Cluster(pub u32);
 pub struct Sector(pub u32);
 
 #[derive(Debug)]
-/// Fat represents a FAT File System
+/// Fat represents the base of a FAT File System
+///
+/// All attributes are shared between the different
+/// types of FAT file systems.
 pub struct Fat {
     /// Memory mapping of the File System ([u8])
     mem: Mmap,                      
     /// original equipment manufacturer label
     oem: String,                    
-    /// The FAT type (FAT12, FAT16, FAT32)
+    /// The FAT type (FAT16, FAT32) as String
     fat_type: String,               
     /// Number of sectors per FAT table
     fat_table_sectors: u32,         
@@ -48,24 +60,29 @@ pub struct Fat {
     /// Offset to the data area
     start_data_area: Sector,        
     /// Offset to the root directory
-    start_root_dir: Sector,         
+    start_root_dir: Sector,
     /// Offset to the cluster area
     start_cluster_area: Sector      
 }
 
 #[derive(Debug)]
-/// Fat represents a FAT File System
+/// Fat represents a FAT16 File System
 pub struct Fat16 {
-
+    /// Parent
+    fat: Fat,
+    /// Total number of root entries
+    total_root_entries: u16,
 }
 
 #[derive(Debug)]
-/// Fat represents a FAT File System
+/// Fat represents a FAT32 File System
 pub struct Fat32 {
-
+    fat: Fat,
+    /// All clusters that belong to the root dir
+    root_clusters: Vec<Cluster>,
 }
 
-
+// ###################### IMPLEMENTATIONS #########################
 
 impl Fat {
     /// Size of a directory entry in bytes
@@ -104,7 +121,7 @@ impl Fat {
         ((self.start_fat_area.0 * self.bytes_per_sector as u32) + (cluster.0 * self.fat_table_entry_size as u32)) as usize
     }
     
-    /// Returns a new Fat
+    /// Returns a new Box pointer to a Fat16 or Fat32
     ///
     /// # Arguments
     ///
@@ -122,7 +139,7 @@ impl Fat {
     ///
     /// let fat = fat::Fat::new(mem);                           // create a new Fat object
     /// ```
-    pub fn new(mem: Mmap) -> Fat {
+    pub fn new(mem: Mmap) -> Box<dyn FAT> {
         let oem = CString::new(&mem[3..11]).expect("Parsing oem field for failed")
                           .into_string().expect("Translation from CString to String failed");
 
@@ -139,7 +156,6 @@ impl Fat {
         };
 
         let fat_table_entry_size = match fat_type.trim() {
-                "FAT12" => 12,
                 "FAT16" => 16,
                 "FAT32" => 32,
                 _ => 0,
@@ -158,18 +174,20 @@ impl Fat {
         let sectors_fat_area = (fat_table_count as u32) * fat_table_sectors;
         let start_fat_area = sectors_reserved_area;
         let start_data_area = (start_fat_area as u32) + sectors_fat_area;
+        let total_root_entries = LittleEndian::read_u16(&mem[17..19]);
         let start_cluster_area = match fat_type.trim() {
                 "FAT32" => start_data_area,
-                _ => start_data_area + ((LittleEndian::read_u16(&mem[17..19]) * Fat::DIR_ENTRY_SIZE) / bytes_per_sector) as u32,
+                _ => start_data_area + ((total_root_entries * Fat::DIR_ENTRY_SIZE) / bytes_per_sector) as u32,
         };
+        let root_cluster = LittleEndian::read_u32(&mem[44..48]);
         let start_root_dir = match fat_type.trim() {
-                "FAT32" => ((LittleEndian::read_u32(&mem[44..48]) - 2) * sectors_per_cluster as u32) + start_cluster_area,
+                "FAT32" => ((root_cluster - 2) * sectors_per_cluster as u32) + start_cluster_area,
                 _ => start_data_area,
         };
         let total_clusters = ((total_sectors - start_cluster_area) / sectors_per_cluster as u32) + 1;
 
 
-        Fat {
+        let f = Fat {
             oem: oem,
             fat_table_sectors: fat_table_sectors,
             fat_type: fat_type,
@@ -187,33 +205,48 @@ impl Fat {
             start_cluster_area: Sector(start_cluster_area),
             total_clusters: total_clusters,
             mem: mem,
+        };
+
+        if f.fat_type.trim() == "FAT16" {
+            return Box::new(Fat16{fat: f, total_root_entries: total_root_entries});
+        } else {
+            return Box::new(Fat32{fat: f, root_clusters: vec![Cluster(root_cluster)]});
         }
     }
     
-    /// Display the directory structure of the file system
-    pub fn tree(&self) {
-        let offset = self.offset(&self.start_root_dir);
-        self._tree(offset);
-    }
-
-    fn _tree(&self, offset: usize) {
+    /// Parse and display entries of a directory and it's sub directories
+    /// recursively.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - Vector of byte offsets to the different clusters of a directory
+    /// * `max` - Maximum number of bytes per cluster
+    ///
+    /// There is only one offset if the fat is of type fat16 and it has a max size of
+    /// <total_root_entries * Fat::DIR_ENTRY_SIZE>.
+    fn _tree(&self, offset: Vec<usize>, max: usize) {
         let mut files: Vec<Entry> = Vec::new();
         let mut lfns: HashMap<u8, Vec<LFNEntry>> = HashMap::new();
-        let mut i = offset;
+        let mut i: usize;
         let mut next; 
-        while self.mem[i] != 0 {
-            next = i + Fat::DIR_ENTRY_SIZE as usize;
 
-            if LFNEntry::is_lfn_entry(self.mem[i + 11]) {
-                let lfn_entry = LFNEntry::new(&self.mem[i..next]);
-                let lfn_vec = lfns.entry(lfn_entry.checksum()).or_insert(Vec::new());
-                lfn_vec.push(lfn_entry);
-            } else {
-                let entry = Entry::new(&self.mem[i..next]);
-                files.push(entry);
+        for coff in offset {   // iterate over each cluster offset of the current dir
+            i = 0;
+
+            while self.mem[coff + i] != 0 && i < max {
+                next = i + Fat::DIR_ENTRY_SIZE as usize;
+
+                if LFNEntry::is_lfn_entry(self.mem[coff + i + 11]) {
+                    let lfn_entry = LFNEntry::new(&self.mem[coff+i..coff+next]);
+                    let lfn_vec = lfns.entry(lfn_entry.checksum()).or_insert(Vec::new());
+                    lfn_vec.push(lfn_entry);
+                } else {
+                    let entry = Entry::new(&self.mem[coff+i..coff+next]);
+                    files.push(entry);
+                }
+
+                i = next;
             }
-
-            i = next;
         }
 
         for e in &mut files {
@@ -269,5 +302,26 @@ Total Sector Range: 0 - {}
         }
     }
     
+}
+
+impl FAT for Fat16 {
+    fn tree(&self) {
+        let offset = self.fat.offset(&self.fat.start_root_dir);
+        self.fat._tree(vec![offset], (self.total_root_entries * Fat::DIR_ENTRY_SIZE) as usize);
+    }
+
+    fn info(&self) {
+        self.fat.info();
+    }
+}
+
+impl FAT for Fat32 {
+    fn tree(&self) {
+
+    }
+
+    fn info(&self) {
+        self.fat.info();
+    }
 }
 
