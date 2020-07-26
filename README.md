@@ -240,6 +240,6 @@ Project Link: [https://github.com/r4gus/greasy](https://github.com/r4gus/greasy)
 [issues-shield]: https://img.shields.io/github/issues/r4gus/greasy?style=flat-square
 [issues-url]: https://github.com/r4gus/greasy/issues
 [license-shield]: https://img.shields.io/github/license/r4gus/greasy?style=flat-square
-[license-url]: https://github.com/r4gus/greasy/blob/master/LICENSE.txt
+[license-url]: https://github.com/r4gus/greasy/blob/traits/LICENSE.txt
 [product-screenshot]: images/screenshot.png
 
